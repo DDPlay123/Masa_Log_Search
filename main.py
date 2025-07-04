@@ -177,7 +177,7 @@ class LogViewerApp(QMainWindow):
             parsed, key=lambda r: r["timestamp"], reverse=self.sort_reverse)
         self.filtered.clear()
         self.current_page = 1
-        self.apply_filter()  # 自動套用篩選條件
+        self.apply_filter()
 
     def on_fetch_error(self, error):
         self.loading.close()
@@ -203,19 +203,43 @@ class LogViewerApp(QMainWindow):
 
         start = (self.current_page - 1) * self.page_size
         end = start + self.page_size
+
         for idx, rec in enumerate(data[start:end], start=start + 1):
             box = QGroupBox(f"#{idx} - {rec['timestamp']}")
             layout = QVBoxLayout(box)
             form = QFormLayout()
             for k, v in rec["post_params"].items():
+                val = str(v)
+                matched = False
+                fuzzy_matched = False
+                for _, k_input, v_input, fuzzy_check in self.filter_entries:
+                    fk = k_input.text().strip()
+                    fv = v_input.text().strip()
+                    fuzzy = fuzzy_check.isChecked()
+                    if not fk or not fv:
+                        continue
+                    if k == fk:
+                        if (not fuzzy and val == fv) or (fuzzy and fv in val):
+                            matched = True
+                            fuzzy_matched = fuzzy
+                            break
+
                 key_edit = QLineEdit(k)
                 key_edit.setReadOnly(True)
-                key_edit.setStyleSheet("background-color: #eee")
-                val = str(v)
+                if matched:
+                    key_edit.setStyleSheet("background-color: yellow")
                 text = QTextEdit()
                 text.setPlainText(val)
                 text.setReadOnly(True)
                 text.setMaximumHeight(60 if "\n" in val or "\t" in val else 28)
+                if matched and fuzzy_matched:
+                    start_idx = val.find(fv)
+                    if start_idx != -1:
+                        fmt_val = (val[:start_idx] + '<span style="color: goldenrod; font-weight: bold">' +
+                                   val[start_idx:start_idx+len(fv)] + '</span>' + val[start_idx+len(fv):])
+                        text.setHtml(fmt_val)
+                elif matched:
+                    text.setStyleSheet("color: goldenrod")
                 form.addRow(key_edit, text)
             layout.addLayout(form)
             layout.addWidget(QLabel(f"User Agent: {rec['user_agent']}"))
