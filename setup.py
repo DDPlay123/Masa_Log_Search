@@ -5,11 +5,18 @@ DATA_FILES = []
 OPTIONS = {
     'argv_emulation': True,
     'packages': ['PyQt6', 'requests', 'pytz', 'pandas'],
-    'iconfile': None
+    'iconfile': None,
+    'plist': {
+        'CFBundleName': 'MasaLogViewer',
+        'CFBundleDisplayName': 'Masa Log Viewer',
+        'CFBundleIdentifier': 'com.example.masalogviewer',
+        'CFBundleVersion': '1.0.0',
+    },
 }
 
 setup(
     app=APP,
+    name='MasaLogViewer',  # 這行是設定 app 名稱
     data_files=DATA_FILES,
     options={'py2app': OPTIONS},
     setup_requires=['py2app'],
