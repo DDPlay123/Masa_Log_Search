@@ -208,6 +208,11 @@ class LogViewerApp(QMainWindow):
             box = QGroupBox(f"#{idx} - {rec['timestamp']}")
             layout = QVBoxLayout(box)
             form = QFormLayout()
+            form.setHorizontalSpacing(12)
+            form.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+            form.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
             for k, v in rec["post_params"].items():
                 val = str(v)
                 matched = False
