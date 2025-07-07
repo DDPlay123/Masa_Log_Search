@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: '3.9'
       - run: pip install -r requirements.txt pyinstaller
-      - run: pyinstaller --windowed --onefile main.py --name MasaLogViewer
+      - run: pyinstaller --windowed --onefile main.py --icon=icon.ico --name MasaLogViewer
       - uses: actions/upload-artifact@v4
         with:
           name: masa-log-windows

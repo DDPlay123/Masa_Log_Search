@@ -5,7 +5,7 @@ DATA_FILES = []
 OPTIONS = {
     'argv_emulation': True,
     'packages': ['PyQt6', 'requests', 'pytz', 'pandas', 'openpyxl'],
-    'iconfile': None,
+    'iconfile': 'icon.ico',
     'plist': {
         'CFBundleName': 'MasaLogViewer',
         'CFBundleDisplayName': 'Masa Log Viewer',

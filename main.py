@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QFileDialog, QProgressDialog, QTextEdit, QComboBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QIcon
 
 API_URL_TEMPLATE = "https://api.1111job.app/logs/{}"
 tz_taipei = pytz.timezone("Asia/Taipei")
@@ -80,6 +81,7 @@ class LogViewerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Masa API Log 檢視工具")
+        self.setWindowIcon(QIcon("icon.ico"))
         self.page_size = 10
         self.current_page = 1
         self.sort_reverse = True
