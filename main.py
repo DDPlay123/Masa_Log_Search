@@ -10,7 +10,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QLineEdit,
     QVBoxLayout, QHBoxLayout, QMessageBox, QScrollArea, QGroupBox, QFormLayout,
-    QSpinBox, QFileDialog, QProgressDialog, QTextEdit
+    QSpinBox, QFileDialog, QProgressDialog, QTextEdit, QComboBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
@@ -184,7 +184,7 @@ class LogViewerApp(QMainWindow):
         QMessageBox.critical(self, "API 錯誤", f"無法取得資料: {error}")
 
     def refresh_data(self):
-        if self.filtered or any(k.text().strip() and v.text().strip() for _, k, v, _ in self.filter_entries):
+        if self.filtered or any(k.text().strip() and v.text().strip() for _, k, v, _, _ in self.filter_entries):
             data = self.filtered
         else:
             data = self.parsed
@@ -217,16 +217,20 @@ class LogViewerApp(QMainWindow):
                 val = str(v)
                 matched = False
                 fuzzy_matched = False
-                for _, k_input, v_input, fuzzy_check in self.filter_entries:
+                for _, k_input, v_input, mode_select, fuzzy_check in self.filter_entries:
                     fk = k_input.text().strip()
                     fv = v_input.text().strip()
+                    mode = mode_select.currentText()
                     fuzzy = fuzzy_check.isChecked()
                     if not fk or not fv:
                         continue
                     if k == fk:
                         if (not fuzzy and val == fv) or (fuzzy and fv in val):
-                            matched = True
+                            matched = mode == "包含"
                             fuzzy_matched = fuzzy
+                            break
+                        elif mode == "不包含" and ((not fuzzy and val == fv) or (fuzzy and fv in val)):
+                            matched = False
                             break
 
                 key_edit = QLineEdit(k)
@@ -261,6 +265,10 @@ class LogViewerApp(QMainWindow):
         key_input.setPlaceholderText("輸入要篩選的 Key")
         val_input = QLineEdit()
         val_input.setPlaceholderText("輸入要篩選的 Value")
+
+        mode_select = QComboBox()
+        mode_select.addItems(["包含", "不包含"])
+
         fuzzy_checkbox = QPushButton("❌ 模糊")
         fuzzy_checkbox.setCheckable(True)
         fuzzy_checkbox.setToolTip("勾選表示啟用模糊比對")
@@ -272,13 +280,15 @@ class LogViewerApp(QMainWindow):
         remove_btn = QPushButton("移除")
         remove_btn.clicked.connect(
             lambda: self.remove_filter_entry(row_layout))
+
         row_layout.addWidget(key_input)
         row_layout.addWidget(val_input)
+        row_layout.addWidget(mode_select)
         row_layout.addWidget(fuzzy_checkbox)
         row_layout.addWidget(remove_btn)
         self.filter_container.addLayout(row_layout)
         self.filter_entries.append(
-            (row_layout, key_input, val_input, fuzzy_checkbox))
+            (row_layout, key_input, val_input, mode_select, fuzzy_checkbox))
 
     def remove_filter_entry(self, layout):
         for entry in self.filter_entries:
@@ -293,12 +303,13 @@ class LogViewerApp(QMainWindow):
 
     def apply_filter(self):
         conditions = []
-        for _, k_input, v_input, fuzzy_check in self.filter_entries:
+        for _, k_input, v_input, mode_select, fuzzy_check in self.filter_entries:
             k = k_input.text().strip()
             v = v_input.text().strip()
+            mode = mode_select.currentText()  # 取得篩選模式
             is_fuzzy = fuzzy_check.isChecked()
             if k and v:
-                conditions.append((k, v, is_fuzzy))
+                conditions.append((k, v, mode, is_fuzzy))
 
         if not conditions:
             self.filtered = []
@@ -306,9 +317,12 @@ class LogViewerApp(QMainWindow):
             self.filtered = [
                 r for r in self.parsed
                 if all(
-                    v in str(r["post_params"].get(k, "")) if fuzzy else str(
-                        r["post_params"].get(k, "")) == v
-                    for k, v, fuzzy in conditions
+                    (v in str(r["post_params"].get(k, "")) if fuzzy else str(
+                        r["post_params"].get(k, "")) == v)
+                    if mode == "包含" else
+                    not (v in str(r["post_params"].get(k, "")) if fuzzy else str(
+                        r["post_params"].get(k, "")) == v)
+                    for k, v, mode, fuzzy in conditions
                 )
             ]
         self.current_page = 1
