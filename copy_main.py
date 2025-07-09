@@ -7,12 +7,14 @@ import requests
 import re
 import pytz
 import math
+import pandas as pd
 from datetime import datetime
+from urllib.parse import unquote
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QLineEdit,
     QVBoxLayout, QHBoxLayout, QMessageBox, QScrollArea, QGroupBox, QFormLayout,
     QSpinBox, QFileDialog, QProgressDialog, QTextEdit, QComboBox, QTableWidget,
-    QStatusBar
+    QStatusBar, QCheckBox
 )
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -37,6 +39,7 @@ class MasaLogEntry:
 
 @dataclass
 class FilterEntry:
+    id: int  # 用於唯一識別篩選條件
     key: str
     value: str
     include: bool  # True for 包含, False for 排除
@@ -106,6 +109,23 @@ class MasaLogAPIThread(QThread):
             self.error_occurred.emit(f"API 請求失敗: {str(e)}")
 
 
+class ExportToExcelThread(QThread):
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, data: List[MasaLogEntry], filename: str):
+        super().__init__()
+        self.data = data
+        self.filename = filename
+
+    def run(self):
+        try:
+            df = pd.DataFrame(self.data)
+            df.to_excel(self.filename, index=False)
+            self.finished.emit(True, f"匯出成功：{self.filename}")
+        except Exception as e:
+            self.finished.emit(False, f"匯出失敗：{str(e)}")
+
+
 class MasaLogViewer(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -123,6 +143,7 @@ class MasaLogViewer(QMainWindow):
         self.parsed_list: List[MasaLogEntry] = []  # 儲存解析後的資料
         self.filtered_list: List[MasaLogEntry] = []  # 儲存過濾後的資料
         self.filter_entries: List[FilterEntry] = []  # 儲存過濾條件
+        self.filter_layout_map = {}  # id → QHBoxLayout
 
         # 初始化 UI
         self._setup_ui()
@@ -172,20 +193,22 @@ class MasaLogViewer(QMainWindow):
         filter_layout.addWidget(add_filter_btn, 1)
         filter_layout.addWidget(apply_filter_btn, 1)
         filter_layout.addWidget(clear_filter_btn, 1)
+        self.filter_entries_layout = QVBoxLayout()
 
         # === 第三列：資料表格 ===
-        scroll_area = QScrollArea()
+        self.scroll_area = QScrollArea()
         scroll_content = QWidget()
         self.scroll_layout = QVBoxLayout()
         scroll_content.setLayout(self.scroll_layout)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setWidget(scroll_content)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setWidget(scroll_content)
 
         # === 組合所有 layout ===
         main_layout = QVBoxLayout()
         main_layout.addLayout(search_layout)
         main_layout.addLayout(filter_layout)
-        main_layout.addWidget(scroll_area)
+        main_layout.addLayout(self.filter_entries_layout)
+        main_layout.addWidget(self.scroll_area)
 
         main_widget.setLayout(main_layout)
 
@@ -228,41 +251,153 @@ class MasaLogViewer(QMainWindow):
 
         # 啟動 API 請求線程
         self.api_thread = MasaLogAPIThread(log_name=log_name)
-        self.api_thread.data_fetched.connect(self.on_masa_log_api_fetched)
-        self.api_thread.error_occurred.connect(self.on_masa_log_api_error)
+        self.api_thread.data_fetched.connect(self._on_masa_log_api_fetched)
+        self.api_thread.error_occurred.connect(self._on_masa_log_api_error)
         self.api_thread.start()
 
-    def on_masa_log_api_fetched(self, data: list[MasaLogEntry]):
+    def _on_masa_log_api_fetched(self, data: list[MasaLogEntry]):
         self.loading.close()
         self.parsed_list = data
         self._apply_filters()
 
-    def on_masa_log_api_error(self, error: str):
+    def _on_masa_log_api_error(self, error: str):
         self.loading.close()
         QMessageBox.critical(self, "錯誤", f"API 請求失敗: {error}")
 
     def _export_to_excel(self):
-        print("匯出到 Excel")
+        data = self.filtered_list.copy()
+        if not data:
+            QMessageBox.warning(self, "錯誤", "沒有資料可以匯出")
+            return
+
+        rows = []
+        for entry in data:
+            row = {
+                "timestamp": entry.timestamp,
+                "ip_address": entry.ip_address,
+                "user_agent": entry.user_agent,
+            }
+            row.update(entry.post_params)
+            rows.append(row)
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "儲存為 Excel 檔案", "", "Excel 檔案 (*.xlsx)"
+        )
+        if not filename:
+            return
+
+        # 顯示 Loading
+        self.loading = QProgressDialog("正在匯出...", None, 0, 0, self)
+        self.loading.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.loading.setCancelButton(None)
+        self.loading.setMinimumDuration(0)
+        self.loading.show()
+
+        # 啟動匯出線程
+        self.export_thread = ExportToExcelThread(data=rows, filename=filename)
+        self.export_thread.finished.connect(self._on_export_finished)
+        self.export_thread.start()
+
+    def _on_export_finished(self, success: bool, message: str):
+        self.loading.close()
+        if success:
+            QMessageBox.information(self, "成功", "匯出成功")
+        else:
+            QMessageBox.critical(self, "錯誤", f"匯出失敗: {message}")
 
     def _toggle_sort_order(self, order: SortOrder):
         self.sort_order = order
-        print(f"切換排序順序: {order.label}")
+        self._apply_filters()
 
     def _add_filter_entry(self):
-        print("新增篩選條件")
+        new_id = len(self.filter_entries)
+
+        row_layout = QHBoxLayout()
+        key_input = QLineEdit()
+        key_input.setPlaceholderText("輸入要篩選的 Key")
+        val_input = QLineEdit()
+        val_input.setPlaceholderText("輸入要篩選的 Value")
+
+        include_checkbox = QCheckBox("包含")
+        include_checkbox.setChecked(True)  # 預設為包含
+        blur_checkbox = QCheckBox("模糊搜尋")
+        blur_checkbox.setChecked(False)  # 預設為精確搜尋
+
+        remove_btn = QPushButton("移除")
+        remove_btn.clicked.connect(
+            lambda: self._remove_filter_entry(new_id)
+        )
+
+        # 整合 Layout
+        row_layout.addWidget(key_input, 1)
+        row_layout.addWidget(val_input, 1)
+        row_layout.addWidget(include_checkbox)
+        row_layout.addWidget(blur_checkbox)
+        row_layout.addWidget(remove_btn)
+        self.filter_entries_layout.addLayout(row_layout)
+        self.filter_layout_map[new_id] = row_layout
+
+        # 新增 FilterEntry
+        new_entry = FilterEntry(
+            id=new_id,
+            key=key_input.text(),
+            value=val_input.text(),
+            include=include_checkbox.isChecked(),
+            blur=blur_checkbox.isChecked()
+        )
+        self.filter_entries.append(new_entry)
+
+    def _remove_filter_entry(self, entry_id: int):
+        # 刪除對應的資料條件
+        self.filter_entries = [
+            entry for entry in self.filter_entries if entry.id != entry_id]
+
+        # 從畫面上移除對應的 layout
+        layout = self.filter_layout_map.get(entry_id)
+        if layout:
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.setParent(None)
+            self.filter_entries_layout.removeItem(layout)
+            del self.filter_layout_map[entry_id]
+
+        self._apply_filters()
 
     def _apply_filters(self):
         # 清除之前的篩選結果
         self.filtered_list.clear()
+        conditions: List[FilterEntry] = []
 
-        # 檢查是否有篩選條件
-        conditions: List[FilterEntry] = [
-            entry for entry in self.filter_entries if entry.key and entry.value
-        ]
+        # 逐一讀取畫面上的所有條件列
+        for i in range(self.filter_entries_layout.count()):
+            layout = self.filter_entries_layout.itemAt(i)
+            if isinstance(layout, QHBoxLayout):
+                widgets = [layout.itemAt(j).widget()
+                           for j in range(layout.count())]
+
+                key_input = widgets[0]
+                val_input = widgets[1]
+                include_checkbox = widgets[2]
+                blur_checkbox = widgets[3]
+
+                if isinstance(key_input, QLineEdit) and isinstance(val_input, QLineEdit):
+                    key = key_input.text().strip()
+                    val = val_input.text().strip()
+                    if key and val:
+                        conditions.append(FilterEntry(
+                            id=i,
+                            key=key,
+                            value=val,
+                            include=include_checkbox.isChecked(),
+                            blur=blur_checkbox.isChecked()
+                        ))
+        self.filter_entries = conditions
 
         # 如果沒有篩選條件，則顯示全部資料
         if not conditions:
-            self.filtered_list = self.parsed_list
+            self.filtered_list = self.parsed_list.copy()
         else:
             self.filtered_list = [
                 # 先取出每一筆資料
@@ -282,7 +417,7 @@ class MasaLogViewer(QMainWindow):
         # 刷新資料顯示
         self._refresh_data(1)
 
-    def _entry_matches_condition(entry: FilterEntry, record: MasaLogEntry) -> bool:
+    def _entry_matches_condition(self, entry: FilterEntry, record: MasaLogEntry) -> bool:
         # 目標值
         target_value = str(record.post_params.get(entry.key, ""))
         # 根據模糊搜尋或精確搜尋進行比較
@@ -294,10 +429,22 @@ class MasaLogViewer(QMainWindow):
         return result if entry.include else not result
 
     def _clear_filters(self):
-        print("清除篩選條件")
+        for i in reversed(range(self.filter_entries_layout.count())):
+            item = self.filter_entries_layout.itemAt(i)
+            if item is not None:
+                layout = item.layout()
+                if layout is not None:
+                    # 移除該 layout 裡的所有 widget
+                    while layout.count():
+                        w = layout.takeAt(0).widget()
+                        if w:
+                            w.setParent(None)
+                    # 移除該 layout 本身
+                    self.filter_entries_layout.removeItem(layout)
+        self.filter_entries.clear()
+        self._apply_filters()
 
     def _on_page_change(self, page: int):
-        print(f"切換到第 {page} 頁")
         self._refresh_data(page)
 
     def _refresh_data(self, page: int):
@@ -326,16 +473,21 @@ class MasaLogViewer(QMainWindow):
 
         # 顯示目前頁面的資料
         for idx, rec in enumerate(self.filtered_list[start_index:end_index], start=start_index + 1):
-            groupBox = QGroupBox(f"第 {idx} 項 - 時間：{rec.timestamp}")
+            groupBox = QGroupBox()
             layout = QVBoxLayout(groupBox)
+            layout.setContentsMargins(10, 10, 10, 10)
+            layout.setSpacing(6)
             formLayout = QFormLayout()
             formLayout.setHorizontalSpacing(10)
             formLayout.setVerticalSpacing(5)
-            formLayout.setFormAlignment(Qt.AlignmentFlag.AlignLeft)  # 表格靠左
-            formLayout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)  # 標籤內容靠右
             formLayout.setFieldGrowthPolicy(
                 QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
             )  # 若欄位過長，則自動擴展
+
+            # 顯示項目編號
+            title_label = QLabel(f"第 {idx} 項 - 時間：{rec.timestamp}")
+            title_label.setStyleSheet("font-weight: bold; font-size: 16px;")
+            formLayout.addRow(title_label)
 
             # 處理欄位內容
             for key, value in rec.post_params.items():
@@ -361,26 +513,29 @@ class MasaLogViewer(QMainWindow):
                 key_edit.setReadOnly(True)
                 key_edit.setMaximumHeight(30)
                 if included:
-                    key_edit.setStyleSheet("background-color: lightgreen;")
+                    key_edit.setStyleSheet("background-color: green;")
 
                 # Value 欄位
-                value_edit = QLineEdit(str_value)
+                value_edit = QTextEdit(str_value)
                 value_edit.setReadOnly(True)
-                value_edit.setMaximumHeight(
-                    100 if "\n" in str_value or "\t" in str_value else 30)
+                doc = value_edit.document()
+                doc.setTextWidth(value_edit.viewport().width())
+                text_height = doc.size().height()
+                value_edit.setFixedHeight(
+                    min(max(int(text_height) + 8, 30), 100))
                 if included and blurred:
                     start_idx = str_value.find(entry.value)
                     if start_idx != -1:
                         value_edit.setHtml(
                             (
-                                str_value[:start_idx] + '<span style="color: lightgreen; font-weight: bold">' +
+                                str_value[:start_idx] + '<span style="color: green; font-weight: bold">' +
                                 str_value[start_idx:start_idx+len(entry.value)] +
                                 '</span>' +
                                 str_value[start_idx+len(entry.value):]
                             )
                         )
                 elif included:
-                    value_edit.setStyleSheet("background-color: lightgreen;")
+                    value_edit.setStyleSheet("background-color: green;")
 
                 formLayout.addRow(key_edit, value_edit)
 
@@ -389,6 +544,7 @@ class MasaLogViewer(QMainWindow):
             layout.addWidget(QLabel(f"IP 位址：{rec.ip_address}"))
             layout.addWidget(QLabel(f"User-Agent：{rec.user_agent}"))
             self.scroll_layout.addWidget(groupBox)
+            self.scroll_area.verticalScrollBar().setValue(0)
 
 
 if __name__ == "__main__":
