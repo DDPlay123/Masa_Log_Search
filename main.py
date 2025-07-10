@@ -47,6 +47,7 @@ class MasaLogEntry:
     post_params: dict
     user_agent: str
     ip_address: str
+    raw_otd: str = ""  # 從 post_params 獨立出 otd (避免格式跑掉)
 
 
 @dataclass
@@ -109,12 +110,25 @@ class MasaLogAPIThread(QThread):
                     print(f"JSON 解析錯誤: {e}")
                     json_data = {"error": "無效 JSON"}
 
+                # 抓取 otd 資料
+                otd_match = re.search(
+                    r'"otd"\s*:\s*"((?:\\.|[^"\\])*)"', json_str)
+                if otd_match:
+                    try:
+                        raw_otd = json.loads(f'"{otd_match.group(1)}"')
+                    except Exception as e:
+                        print(f"otd JSON decode error: {e}")
+                        raw_otd = ""
+                else:
+                    raw_otd = ""
+
                 # 將解析後的資料加入列表
                 parsed_list.append(MasaLogEntry(
                     timestamp=timestamp_formatted,
                     post_params=json_data.get("post_params", {}),
                     user_agent=json_data.get("user_agent", "未知"),
-                    ip_address=json_data.get("ip_address", "未知")
+                    ip_address=json_data.get("ip_address", "未知"),
+                    raw_otd=raw_otd
                 ))
             self.data_fetched.emit(parsed_list)
         except Exception as e:
@@ -632,7 +646,10 @@ class MasaLogViewer(QMainWindow):
             # 處理欄位內容
             for key, value in rec.post_params.items():
                 # 強制轉為 String
-                str_value = str(value)
+                if key == "otd" and rec.raw_otd:
+                    str_value = rec.raw_otd  # ← 使用原始 JSON otd
+                else:
+                    str_value = str(value)
 
                 # 判斷該欄位是否符合篩選條件
                 included = False  # 是否是包含
@@ -660,6 +677,7 @@ class MasaLogViewer(QMainWindow):
                 # Value 欄位
                 value_edit = QTextEdit(str_value)
                 value_edit.setReadOnly(True)
+                value_edit.setPlainText(str_value)
                 doc = value_edit.document()
                 doc.setTextWidth(value_edit.viewport().width())
                 text_height = doc.size().height()
@@ -668,14 +686,7 @@ class MasaLogViewer(QMainWindow):
                 if included and blurred:
                     start_idx = str_value.find(entry.value)
                     if start_idx != -1:
-                        value_edit.setHtml(
-                            (
-                                str_value[:start_idx] + '<span style="color: green; font-weight: bold">' +
-                                str_value[start_idx:start_idx+len(entry.value)] +
-                                '</span>' +
-                                str_value[start_idx+len(entry.value):]
-                            )
-                        )
+                        value_edit.setStyleSheet("background-color: green;")
                     else:
                         value_edit.setPlainText(str_value)
                 elif included:
