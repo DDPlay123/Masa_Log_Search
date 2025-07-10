@@ -13,8 +13,8 @@ from urllib.parse import unquote
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QLineEdit,
     QVBoxLayout, QHBoxLayout, QMessageBox, QScrollArea, QGroupBox, QFormLayout,
-    QSpinBox, QFileDialog, QProgressDialog, QTextEdit, QComboBox, QTableWidget,
-    QStatusBar, QCheckBox
+    QSpinBox, QFileDialog, QProgressDialog, QTextEdit, QComboBox, QDateTimeEdit,
+    QStatusBar, QCheckBox, QLayout
 )
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -23,6 +23,17 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 class SortOrder(Enum):
     NEWEST_FIRST = (0, "排序：最新在前")
     OLDEST_FIRST = (1, "排序：最舊在前")
+
+    def __init__(self, index, label):
+        self.index = index
+        self.label = label
+
+
+class TimeFilter(Enum):
+    ALL = (0, "全部時間")
+    BEFORE_TIME = (1, "在此時間之前")
+    AFTER_TIME = (2, "在此時間之後")
+    TIME_RANGE = (3, "在此時間範圍內")
 
     def __init__(self, index, label):
         self.index = index
@@ -140,6 +151,7 @@ class MasaLogViewer(QMainWindow):
         self.current_page = 1  # 當前頁碼
         self.total_pages = 1  # 總頁數
         self.sort_order = SortOrder.NEWEST_FIRST  # 預設排序方式
+        self.time_filter = TimeFilter.ALL  # 預設時間篩選方式
         self.parsed_list: List[MasaLogEntry] = []  # 儲存解析後的資料
         self.filtered_list: List[MasaLogEntry] = []  # 儲存過濾後的資料
         self.filter_entries: List[FilterEntry] = []  # 儲存過濾條件
@@ -153,7 +165,7 @@ class MasaLogViewer(QMainWindow):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
 
-        # === 第一列：Log Name 搜尋區 ===
+        # === Log Name 搜尋區 ===
         log_name_label = QLabel("Log Name:")
         log_name_input = QLineEdit()
         log_name_input.setPlaceholderText("輸入 Log Name")
@@ -165,8 +177,10 @@ class MasaLogViewer(QMainWindow):
         search_btn.clicked.connect(
             lambda: self._query_masa_log(log_name_input.text().strip())
         )
+
         export_btn = QPushButton("Excel 匯出")
         export_btn.clicked.connect(self._export_to_excel)
+
         sort_combo = QComboBox()
         for order in SortOrder:
             sort_combo.addItem(order.label, userData=order)
@@ -177,6 +191,16 @@ class MasaLogViewer(QMainWindow):
             )
         )
 
+        time_filter_combo = QComboBox()
+        for time_filter in TimeFilter:
+            time_filter_combo.addItem(time_filter.label, userData=time_filter)
+        time_filter_combo.setCurrentIndex(self.time_filter.index)
+        time_filter_combo.currentIndexChanged.connect(
+            lambda index: self._toggle_time_edit(
+                time_filter_combo.itemData(index)
+            )
+        )
+
         search_layout = QHBoxLayout()
         search_layout.addWidget(log_name_label)
         search_layout.addWidget(log_name_input, 1)
@@ -184,8 +208,54 @@ class MasaLogViewer(QMainWindow):
         search_layout.addWidget(search_btn)
         search_layout.addWidget(export_btn)
         search_layout.addWidget(sort_combo)
+        search_layout.addWidget(time_filter_combo)
 
-        # === 第二列：篩選按鈕區 ===
+        # === 時間篩選區 ===
+        before_time_label = QLabel("在此時間之前:")
+        self.before_time_edit = QDateTimeEdit()
+        self.before_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.before_time_edit.setCalendarPopup(True)
+        self.before_time_edit.setDateTimeRange(
+            datetime(2000, 1, 1, 0, 0), datetime.now())
+        self.before_time_edit.setDateTime(datetime.now())
+
+        self.before_time_edit_layout = QHBoxLayout()
+        self.before_time_edit_layout.addWidget(before_time_label)
+        self.before_time_edit_layout.addWidget(self.before_time_edit, 1)
+
+        after_time_label = QLabel("在此時間之後:")
+        self.after_time_edit = QDateTimeEdit()
+        self.after_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.after_time_edit.setCalendarPopup(True)
+        self.after_time_edit.setDateTimeRange(
+            datetime(2000, 1, 1, 0, 0), datetime.now())
+        self.after_time_edit.setDateTime(datetime.now())
+
+        self.after_time_edit_layout = QHBoxLayout()
+        self.after_time_edit_layout.addWidget(after_time_label)
+        self.after_time_edit_layout.addWidget(self.after_time_edit, 1)
+
+        time_range_label = QLabel("在此時間範圍內:")
+        self.start_time_edit = QDateTimeEdit()
+        self.start_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.start_time_edit.setCalendarPopup(True)
+        self.start_time_edit.setDateTimeRange(
+            datetime(2000, 1, 1, 0, 0), datetime.now())
+        self.start_time_edit.setDateTime(datetime.now())
+        self.end_time_edit = QDateTimeEdit()
+        self.end_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.end_time_edit.setCalendarPopup(True)
+        self.end_time_edit.setDateTimeRange(
+            datetime(2000, 1, 1, 0, 0), datetime.now())
+        self.end_time_edit.setDateTime(datetime.now())
+
+        self.time_range_edit_layout = QHBoxLayout()
+        self.time_range_edit_layout.addWidget(time_range_label)
+        self.time_range_edit_layout.addWidget(self.start_time_edit, 1)
+        self.time_range_edit_layout.addWidget(QLabel("至"))
+        self.time_range_edit_layout.addWidget(self.end_time_edit, 1)
+
+        # === 篩選按鈕區 ===
         add_filter_btn = QPushButton("新增篩選")
         add_filter_btn.clicked.connect(self._add_filter_entry)
         apply_filter_btn = QPushButton("套用")
@@ -199,7 +269,7 @@ class MasaLogViewer(QMainWindow):
         filter_layout.addWidget(clear_filter_btn, 1)
         self.filter_entries_layout = QVBoxLayout()
 
-        # === 第三列：資料表格 ===
+        # === 資料表格 ===
         self.scroll_area = QScrollArea()
         scroll_content = QWidget()
         self.scroll_layout = QVBoxLayout()
@@ -210,6 +280,9 @@ class MasaLogViewer(QMainWindow):
         # === 組合所有 layout ===
         main_layout = QVBoxLayout()
         main_layout.addLayout(search_layout)
+        main_layout.addLayout(self.before_time_edit_layout)
+        main_layout.addLayout(self.after_time_edit_layout)
+        main_layout.addLayout(self.time_range_edit_layout)
         main_layout.addLayout(filter_layout)
         main_layout.addLayout(self.filter_entries_layout)
         main_layout.addWidget(self.scroll_area)
@@ -224,13 +297,41 @@ class MasaLogViewer(QMainWindow):
         self.page_spin.setRange(1, self.total_pages)
         self.page_spin.setValue(self.current_page)
         self.page_spin.valueChanged.connect(self._on_page_change)
-        self._update_status_bar()
 
         status_bar = QStatusBar()
         status_bar.addWidget(self.total_count_label)
         status_bar.addPermanentWidget(self.page_label)
         status_bar.addPermanentWidget(self.page_spin)
         self.setStatusBar(status_bar)
+
+        # 初始化狀態
+        self._toggle_time_edit(self.time_filter)
+        self._update_status_bar()
+
+    def _toggle_sort_order(self, order: SortOrder):
+        self.sort_order = order
+        self._apply_filters()
+
+    def _toggle_time_edit(self, time_filter: TimeFilter):
+        self._toggle_layout_widgets_visible(
+            self.before_time_edit_layout,
+            time_filter == TimeFilter.BEFORE_TIME
+        )
+        self._toggle_layout_widgets_visible(
+            self.after_time_edit_layout,
+            time_filter == TimeFilter.AFTER_TIME
+        )
+        self._toggle_layout_widgets_visible(
+            self.time_range_edit_layout,
+            time_filter == TimeFilter.TIME_RANGE
+        )
+
+    def _toggle_layout_widgets_visible(self, layout: QLayout, visible: bool):
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            widget = item.widget()
+            if widget:
+                widget.setVisible(visible)
 
     def _update_status_bar(self):
         self.total_count_label.setText(f"數量：{self.total_size} 項")
@@ -309,10 +410,6 @@ class MasaLogViewer(QMainWindow):
             QMessageBox.information(self, "成功", "匯出成功")
         else:
             QMessageBox.critical(self, "錯誤", f"匯出失敗: {message}")
-
-    def _toggle_sort_order(self, order: SortOrder):
-        self.sort_order = order
-        self._apply_filters()
 
     def _add_filter_entry(self):
         new_id = len(self.filter_entries)
