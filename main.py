@@ -123,7 +123,7 @@ class MasaLogAPIThread(QThread):
 class ExportToExcelThread(QThread):
     finished = pyqtSignal(bool, str)
 
-    def __init__(self, data: List[MasaLogEntry], filename: str):
+    def __init__(self, data: list, filename: str):  # 修正型態註解
         super().__init__()
         self.data = data
         self.filename = filename
@@ -155,6 +155,7 @@ class MasaLogViewer(QMainWindow):
         self.parsed_list: List[MasaLogEntry] = []  # 儲存解析後的資料
         self.filtered_list: List[MasaLogEntry] = []  # 儲存過濾後的資料
         self.filter_entries: List[FilterEntry] = []  # 儲存過濾條件
+        self._filter_id_counter = 0
         self.filter_layout_map = {}  # id → QHBoxLayout
 
         # 初始化 UI
@@ -313,6 +314,7 @@ class MasaLogViewer(QMainWindow):
         self._apply_filters()
 
     def _toggle_time_edit(self, time_filter: TimeFilter):
+        self.time_filter = time_filter
         self._toggle_layout_widgets_visible(
             self.before_time_edit_layout,
             time_filter == TimeFilter.BEFORE_TIME
@@ -325,6 +327,7 @@ class MasaLogViewer(QMainWindow):
             self.time_range_edit_layout,
             time_filter == TimeFilter.TIME_RANGE
         )
+        self._apply_filters()
 
     def _toggle_layout_widgets_visible(self, layout: QLayout, visible: bool):
         for i in range(layout.count()):
@@ -339,8 +342,10 @@ class MasaLogViewer(QMainWindow):
             len(self.filtered_list) / self.page_size))
         self.page_label.setText(
             f"第 {self.current_page} 頁 / 共 {self.total_pages} 頁")
+        self.page_spin.blockSignals(True)
         self.page_spin.setRange(1, self.total_pages)
         self.page_spin.setValue(self.current_page)
+        self.page_spin.blockSignals(False)
 
     def _query_masa_log(self, log_name: str):
         if not log_name:
@@ -361,7 +366,7 @@ class MasaLogViewer(QMainWindow):
         self.api_thread.error_occurred.connect(self._on_masa_log_api_error)
         self.api_thread.start()
 
-    def _on_masa_log_api_fetched(self, data: list[MasaLogEntry]):
+    def _on_masa_log_api_fetched(self, data: List[MasaLogEntry]):
         self.loading.close()
         self.parsed_list = data
         self._apply_filters()
@@ -412,7 +417,8 @@ class MasaLogViewer(QMainWindow):
             QMessageBox.critical(self, "錯誤", f"匯出失敗: {message}")
 
     def _add_filter_entry(self):
-        new_id = len(self.filter_entries)
+        new_id = self._filter_id_counter
+        self._filter_id_counter += 1
 
         row_layout = QHBoxLayout()
         key_input = QLineEdit()
@@ -497,26 +503,42 @@ class MasaLogViewer(QMainWindow):
                         ))
         self.filter_entries = conditions
 
-        # 如果沒有篩選條件，則顯示全部資料
-        if not conditions:
-            self.filtered_list = self.parsed_list.copy()
-        else:
-            self.filtered_list = [
-                # 先取出每一筆資料
-                record for record in self.parsed_list
-                # 檢查是否符合所有條件
-                if all(self._entry_matches_condition(cond, record) for cond in conditions)
-            ]
+        data = self.parsed_list.copy()
 
-        # 根據排序方式進行排序
-        if self.sort_order == SortOrder.NEWEST_FIRST:
-            self.filtered_list.sort(
-                key=lambda x: x.timestamp, reverse=True)
-        elif self.sort_order == SortOrder.OLDEST_FIRST:
-            self.filtered_list.sort(
-                key=lambda x: x.timestamp, reverse=False)
+        # 條件過濾
+        if conditions:
+            data = [record for record in data if all(
+                self._entry_matches_condition(cond, record) for cond in conditions)]
 
-        # 刷新資料顯示
+        # 時間條件過濾
+        def to_dt(val: str):
+            try:
+                return datetime.strptime(val, "%Y-%m-%d %H:%M:%S")
+            except:
+                return None
+
+        if self.time_filter == TimeFilter.BEFORE_TIME:
+            bound = self.before_time_edit.dateTime().toPyDateTime()
+            data = [rec for rec in data if (
+                dt := to_dt(rec.timestamp)) and dt <= bound]
+
+        elif self.time_filter == TimeFilter.AFTER_TIME:
+            bound = self.after_time_edit.dateTime().toPyDateTime()
+            data = [rec for rec in data if (
+                dt := to_dt(rec.timestamp)) and dt >= bound]
+
+        elif self.time_filter == TimeFilter.TIME_RANGE:
+            start = self.start_time_edit.dateTime().toPyDateTime()
+            end = self.end_time_edit.dateTime().toPyDateTime()
+            data = [rec for rec in data if (dt := to_dt(
+                rec.timestamp)) and start <= dt <= end]
+
+        self.filtered_list = data
+
+        # 根據排序方式排序
+        reverse = self.sort_order == SortOrder.NEWEST_FIRST
+        self.filtered_list.sort(key=lambda x: x.timestamp, reverse=reverse)
+
         self._refresh_data(1)
 
     def _entry_matches_condition(self, entry: FilterEntry, record: MasaLogEntry) -> bool:
@@ -544,6 +566,8 @@ class MasaLogViewer(QMainWindow):
                     # 移除該 layout 本身
                     self.filter_entries_layout.removeItem(layout)
         self.filter_entries.clear()
+        self.filter_layout_map.clear()
+        self._filter_id_counter = 0
         self._apply_filters()
 
     def _on_page_change(self, page: int):
@@ -621,6 +645,8 @@ class MasaLogViewer(QMainWindow):
                 key_edit.setMaximumHeight(30)
                 if included:
                     key_edit.setStyleSheet("background-color: green;")
+                else:
+                    key_edit.setStyleSheet("")
 
                 # Value 欄位
                 value_edit = QTextEdit(str_value)
@@ -641,8 +667,12 @@ class MasaLogViewer(QMainWindow):
                                 str_value[start_idx+len(entry.value):]
                             )
                         )
+                    else:
+                        value_edit.setPlainText(str_value)
                 elif included:
                     value_edit.setStyleSheet("background-color: green;")
+                else:
+                    value_edit.setStyleSheet("")
 
                 formLayout.addRow(key_edit, value_edit)
 
