@@ -10,6 +10,7 @@ import math
 import pandas as pd
 from datetime import datetime
 from urllib.parse import unquote
+from collections import defaultdict
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QLineEdit,
     QVBoxLayout, QHBoxLayout, QMessageBox, QScrollArea, QGroupBox, QFormLayout,
@@ -505,10 +506,22 @@ class MasaLogViewer(QMainWindow):
 
         data = self.parsed_list.copy()
 
+        # 將條件依 key 分組
+        grouped_conditions = defaultdict(list)
+        for cond in conditions:
+            grouped_conditions[cond.key].append(cond)
+
+        # 比對每筆資料是否符合所有 key 的「任一條件」
+        def record_matches(record: MasaLogEntry) -> bool:
+            for key, cond_list in grouped_conditions.items():
+                value = str(record.post_params.get(key, ""))
+                if not any(self._entry_matches_condition(cond, value) for cond in cond_list):
+                    return False
+            return True
+
         # 條件過濾
         if conditions:
-            data = [record for record in data if all(
-                self._entry_matches_condition(cond, record) for cond in conditions)]
+            data = [record for record in data if record_matches(record)]
 
         # 時間條件過濾
         def to_dt(val: str):
@@ -541,15 +554,11 @@ class MasaLogViewer(QMainWindow):
 
         self._refresh_data(1)
 
-    def _entry_matches_condition(self, entry: FilterEntry, record: MasaLogEntry) -> bool:
-        # 目標值
-        target_value = str(record.post_params.get(entry.key, ""))
-        # 根據模糊搜尋或精確搜尋進行比較
+    def _entry_matches_condition(self, entry: FilterEntry, value: str) -> bool:
         if entry.blur:
-            result = entry.value in target_value
+            result = entry.value in value
         else:
-            result = entry.value == target_value
-        # 根據包含或排除進行最終判斷
+            result = entry.value == value
         return result if entry.include else not result
 
     def _clear_filters(self):
