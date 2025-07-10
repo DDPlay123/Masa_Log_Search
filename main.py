@@ -50,10 +50,10 @@ class MasaLogAPIThread(QThread):
     data_fetched = pyqtSignal(list)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, log_name):
+    def __init__(self, log_name, is_test_env: bool):
         super().__init__()
         self.log_name = log_name
-        self.api_url = "https://api.1111job.app/logs/{}"
+        self.api_url = "https://uat-api.1111job.app/logs/{}" if is_test_env else "https://api.1111job.app/logs/{}"
         self.tz_taipei = pytz.timezone("Asia/Taipei")
 
     def run(self):
@@ -158,6 +158,9 @@ class MasaLogViewer(QMainWindow):
         log_name_input = QLineEdit()
         log_name_input.setPlaceholderText("輸入 Log Name")
 
+        self.test_env_checkbox = QCheckBox("測試環境")
+        self.test_env_checkbox.setChecked(False)  # 預設為測試環境
+
         search_btn = QPushButton("查詢")
         search_btn.clicked.connect(
             lambda: self._query_masa_log(log_name_input.text().strip())
@@ -177,6 +180,7 @@ class MasaLogViewer(QMainWindow):
         search_layout = QHBoxLayout()
         search_layout.addWidget(log_name_label)
         search_layout.addWidget(log_name_input, 1)
+        search_layout.addWidget(self.test_env_checkbox)
         search_layout.addWidget(search_btn)
         search_layout.addWidget(export_btn)
         search_layout.addWidget(sort_combo)
@@ -250,7 +254,8 @@ class MasaLogViewer(QMainWindow):
         self.loading.show()
 
         # 啟動 API 請求線程
-        self.api_thread = MasaLogAPIThread(log_name=log_name)
+        self.api_thread = MasaLogAPIThread(
+            log_name=log_name, is_test_env=self.test_env_checkbox.isChecked())
         self.api_thread.data_fetched.connect(self._on_masa_log_api_fetched)
         self.api_thread.error_occurred.connect(self._on_masa_log_api_error)
         self.api_thread.start()
