@@ -9,7 +9,6 @@ import pytz
 import math
 import pandas as pd
 from datetime import datetime
-from urllib.parse import unquote
 from collections import defaultdict
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QLineEdit,
@@ -17,7 +16,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QFileDialog, QProgressDialog, QTextEdit, QComboBox, QDateTimeEdit,
     QStatusBar, QCheckBox, QLayout
 )
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QTextCharFormat, QColor
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 
@@ -670,29 +669,22 @@ class MasaLogViewer(QMainWindow):
                 key_edit.setReadOnly(True)
                 key_edit.setMaximumHeight(30)
                 if included:
-                    key_edit.setStyleSheet("background-color: green;")
+                    key_edit.setStyleSheet("background-color: lightgreen;")
                 else:
                     key_edit.setStyleSheet("")
 
                 # Value 欄位
-                value_edit = QTextEdit(str_value)
+                value_edit = QTextEdit()
                 value_edit.setReadOnly(True)
-                value_edit.setPlainText(str_value)
-                doc = value_edit.document()
-                doc.setTextWidth(value_edit.viewport().width())
-                text_height = doc.size().height()
-                value_edit.setFixedHeight(
-                    min(max(int(text_height) + 8, 30), 100))
+
                 if included and blurred:
-                    start_idx = str_value.find(entry.value)
-                    if start_idx != -1:
-                        value_edit.setStyleSheet("background-color: green;")
-                    else:
-                        value_edit.setPlainText(str_value)
+                    self._set_rich_text_with_auto_height(
+                        value_edit, str_value, entry.value, color="lightgreen")
                 elif included:
-                    value_edit.setStyleSheet("background-color: green;")
+                    value_edit.setStyleSheet("background-color: lightgreen;")
+                    self._set_text_with_auto_height(value_edit, str_value)
                 else:
-                    value_edit.setStyleSheet("")
+                    self._set_text_with_auto_height(value_edit, str_value)
 
                 formLayout.addRow(key_edit, value_edit)
 
@@ -702,6 +694,35 @@ class MasaLogViewer(QMainWindow):
             layout.addWidget(QLabel(f"User-Agent：{rec.user_agent}"))
             self.scroll_layout.addWidget(groupBox)
             self.scroll_area.verticalScrollBar().setValue(0)
+
+    def _set_text_with_auto_height(self, text_edit: QTextEdit, text: str, max_height: int = 300):
+        text_edit.clear()
+        text_edit.setPlainText(text)
+
+        doc = text_edit.document()
+        doc.setTextWidth(text_edit.viewport().width())
+        height = doc.size().height()
+        text_edit.setFixedHeight(min(max(int(height) + 8, 30), max_height))
+
+    def _set_rich_text_with_auto_height(self, text_edit: QTextEdit, full_text: str, keyword: str, color: str = "green", max_height: int = 300):
+        text_edit.clear()
+        cursor = text_edit.textCursor()
+
+        fmt_normal = QTextCharFormat()
+        fmt_highlight = QTextCharFormat()
+        fmt_highlight.setBackground(QColor(color))
+
+        last = 0
+        while (idx := full_text.find(keyword, last)) != -1:
+            cursor.insertText(full_text[last:idx], fmt_normal)
+            cursor.insertText(keyword, fmt_highlight)
+            last = idx + len(keyword)
+        cursor.insertText(full_text[last:], fmt_normal)
+
+        doc = text_edit.document()
+        doc.setTextWidth(text_edit.viewport().width())
+        height = doc.size().height()
+        text_edit.setFixedHeight(min(max(int(height) + 8, 30), max_height))
 
 
 if __name__ == "__main__":
